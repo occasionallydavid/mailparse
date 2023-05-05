@@ -135,13 +135,27 @@ impl<'a> BinaryBody<'a> {
     }
 }
 
+
+fn _make_thing() -> data_encoding::Encoding
+{
+    let mut spec = data_encoding::BASE64_MIME.specification();
+    spec.check_trailing_bits = false;
+    spec.encoding().unwrap()
+}
+
+
+lazy_static! {
+    static ref BASE64_MIME_LAX: data_encoding::Encoding = _make_thing();
+}
+
+
 fn decode_base64(body: &[u8]) -> Result<Vec<u8>, MailParseError> {
     let cleaned = body
         .iter()
         .filter(|c| !c.is_ascii_whitespace())
         .cloned()
         .collect::<Vec<u8>>();
-    Ok(data_encoding::BASE64_MIME.decode(&cleaned)?)
+    Ok(BASE64_MIME_LAX.decode(&cleaned)?)
 }
 
 fn decode_quoted_printable(body: &[u8]) -> Result<Vec<u8>, MailParseError> {

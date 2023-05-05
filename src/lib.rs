@@ -4,6 +4,9 @@ extern crate charset;
 extern crate data_encoding;
 extern crate quoted_printable;
 
+#[macro_use]
+extern crate lazy_static;
+
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 use std::error;
