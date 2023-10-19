@@ -342,7 +342,7 @@ pub fn parse_header(raw_data: &[u8]) -> Result<(MailHeader, usize), MailParseErr
     let mut ix_value_start = 0;
     let mut ix_value_end = 0;
 
-    println!("raw_data: {,}\n", raw_data);
+    println!("raw_data: {:?}\n", raw_data);
 
     let mut state = HeaderParseState::Initial;
     loop {
