@@ -342,13 +342,12 @@ pub fn parse_header(raw_data: &[u8]) -> Result<(MailHeader, usize), MailParseErr
     let mut ix_value_start = 0;
     let mut ix_value_end = 0;
 
-    println!("raw_data: {:?}\n", raw_data);
-
     let mut state = HeaderParseState::Initial;
     loop {
         match state {
             HeaderParseState::Initial => {
                 if c == b' ' {
+                    println!("raw_data: {:?}\n", raw_data);
                     return Err(MailParseError::Generic(
                         "Header cannot start with a space; it is \
                          likely an overhanging line from a \
