@@ -129,7 +129,7 @@ fn find_from_u8(line: &[u8], ix_start: usize, key: &[u8]) -> Option<usize> {
     }
     let ix_end = line.len() - key.len();
     if ix_start <= ix_end {
-        for i in ix_start..ix_end {
+        for i in ix_start..=ix_end {
             if line[i] == key[0] {
                 let mut success = true;
                 for j in 1..key.len() {
@@ -154,7 +154,8 @@ fn test_find_from_u8() {
     assert_eq!(find_from_u8(b"hello world", 4, b"o"), Some(4));
     assert_eq!(find_from_u8(b"hello world", 5, b"o"), Some(7));
     assert_eq!(find_from_u8(b"hello world", 8, b"o"), None);
-    assert_eq!(find_from_u8(b"hello world", 10, b"d"), None);
+    assert_eq!(find_from_u8(b"hello world", 10, b"d"), Some(10));
+    assert_eq!(find_from_u8(b"hello world", 0, b"world"), Some(6));
 }
 
 // Like find_from_u8, but additionally filters such that `key` is at the start
@@ -179,6 +180,10 @@ fn test_find_from_u8_line_prefix() {
     assert_eq!(find_from_u8_line_prefix(b"hello\nworld", 0, b"wo"), Some(6));
     assert_eq!(find_from_u8_line_prefix(b"hello\nworld", 6, b"wo"), Some(6));
     assert_eq!(find_from_u8_line_prefix(b"hello\nworld", 7, b"wo"), None);
+    assert_eq!(
+        find_from_u8_line_prefix(b"hello\nworld", 0, b"world"),
+        Some(6)
+    );
 }
 
 impl<'a> MailHeader<'a> {
@@ -926,7 +931,7 @@ impl<'a> Iterator for PartsIterator<'a> {
 ///         Some("This is a test email".to_string()));
 ///     assert_eq!(parsed.subparts.len(), 2);
 ///     assert_eq!(parsed.subparts[0].get_body().unwrap(),
-///         "This is the plaintext version, in utf-8. Proof by Euro: \u{20AC}\r\n");
+///         "This is the plaintext version, in utf-8. Proof by Euro: \u{20AC}");
 ///     assert_eq!(parsed.subparts[1].headers[1].get_value(), "base64");
 ///     assert_eq!(parsed.subparts[1].ctype.mimetype, "text/html");
 ///     assert!(parsed.subparts[1].get_body().unwrap().starts_with("<html>"));
@@ -934,6 +939,20 @@ impl<'a> Iterator for PartsIterator<'a> {
 /// ```
 pub fn parse_mail(raw_data: &[u8]) -> Result<ParsedMail, MailParseError> {
     parse_mail_recursive(raw_data, false)
+}
+
+/// Strips LF or CRLF if there is one at the end of the string raw_data[ix_start..ix].
+/// This is used to ensure that CRLF just before a boundary is treated as part of the
+/// boundary, not the body part that was before the boundary. See discussion in
+/// https://github.com/staktrace/mailparse/issues/127.
+fn strip_trailing_crlf(raw_data: &[u8], ix_start: usize, mut ix: usize) -> usize {
+    if ix > ix_start && raw_data[ix - 1] == b'\n' {
+        ix -= 1;
+        if ix > ix_start && raw_data[ix - 1] == b'\r' {
+            ix -= 1;
+        }
+    }
+    ix
 }
 
 fn parse_mail_recursive(
@@ -960,23 +979,29 @@ fn parse_mail_recursive(
     {
         let in_multipart_digest = result.ctype.mimetype == "multipart/digest";
         let boundary = String::from("--") + &result.ctype.params["boundary"];
-        if let Some(ix_body_end) = find_from_u8_line_prefix(raw_data, ix_body, boundary.as_bytes())
+        if let Some(ix_boundary_start) =
+            find_from_u8_line_prefix(raw_data, ix_body, boundary.as_bytes())
         {
+            let ix_body_end = strip_trailing_crlf(raw_data, ix_body, ix_boundary_start);
             result.body_bytes = &raw_data[ix_body..ix_body_end];
-            let mut ix_boundary_end = ix_body_end + boundary.len();
+            let mut ix_boundary_end = ix_boundary_start + boundary.len();
             while let Some(ix_part_start) =
                 find_from_u8(raw_data, ix_boundary_end, b"\n").map(|v| v + 1)
             {
-                // if there is no terminating boundary, assume the part end is the end of the email
-                let ix_part_end =
-                    find_from_u8_line_prefix(raw_data, ix_part_start, boundary.as_bytes())
-                        .unwrap_or(raw_data.len());
+                let ix_part_boundary_start =
+                    find_from_u8_line_prefix(raw_data, ix_part_start, boundary.as_bytes());
+                let ix_part_end = ix_part_boundary_start
+                    .map(|x| strip_trailing_crlf(raw_data, ix_part_start, x))
+                    // if there is no terminating boundary, assume the part end is the end of the email
+                    .unwrap_or(raw_data.len());
 
                 result.subparts.push(parse_mail_recursive(
                     &raw_data[ix_part_start..ix_part_end],
                     in_multipart_digest,
                 )?);
-                ix_boundary_end = ix_part_end + boundary.len();
+                ix_boundary_end = ix_part_boundary_start
+                    .map(|x| x + boundary.len())
+                    .unwrap_or(raw_data.len());
                 if ix_boundary_end + 2 > raw_data.len()
                     || (raw_data[ix_boundary_end] == b'-' && raw_data[ix_boundary_end + 1] == b'-')
                 {
@@ -1652,7 +1677,7 @@ mod tests {
             .as_bytes(),
         )
         .unwrap();
-        assert_eq!(mail.subparts[0].get_body().unwrap(), "part0\r\n");
+        assert_eq!(mail.subparts[0].get_body().unwrap(), "part0");
         assert_eq!(mail.subparts[1].get_body().unwrap(), "part1\r\n");
     }
 
@@ -2020,7 +2045,7 @@ mod tests {
         part = parts.next().unwrap(); // mail.subparts[0]
         assert_eq!(part.headers.len(), 0);
         assert_eq!(part.ctype.mimetype, "text/plain");
-        assert_eq!(part.get_body_raw().unwrap(), b"blah blah blah\n");
+        assert_eq!(part.get_body_raw().unwrap(), b"blah blah blah");
 
         part = parts.next().unwrap(); // mail.subparts[1]
         assert_eq!(part.ctype.mimetype, "multipart/digest");
@@ -2028,12 +2053,12 @@ mod tests {
         part = parts.next().unwrap(); // mail.subparts[1].subparts[0]
         assert_eq!(part.headers.len(), 0);
         assert_eq!(part.ctype.mimetype, "message/rfc822");
-        assert_eq!(part.get_body_raw().unwrap(), b"nested default part\n");
+        assert_eq!(part.get_body_raw().unwrap(), b"nested default part");
 
         part = parts.next().unwrap(); // mail.subparts[1].subparts[1]
         assert_eq!(part.headers.len(), 1);
         assert_eq!(part.ctype.mimetype, "text/html");
-        assert_eq!(part.get_body_raw().unwrap(), b"nested html part\n");
+        assert_eq!(part.get_body_raw().unwrap(), b"nested html part");
 
         part = parts.next().unwrap(); // mail.subparts[1].subparts[2]
         assert_eq!(part.headers.len(), 1);
@@ -2042,7 +2067,7 @@ mod tests {
         part = parts.next().unwrap(); // mail.subparts[1].subparts[2].subparts[0]
         assert_eq!(part.headers.len(), 0);
         assert_eq!(part.ctype.mimetype, "text/plain");
-        assert_eq!(part.get_body_raw().unwrap(), b"inside part\n");
+        assert_eq!(part.get_body_raw().unwrap(), b"inside part");
 
         assert!(parts.next().is_none());
     }
@@ -2087,13 +2112,13 @@ mod tests {
         part = parts.next().unwrap(); // mail.subparts[0].subparts[0]
         assert_eq!(part.headers.len(), 1);
         assert_eq!(part.ctype.mimetype, "text/html");
-        assert_eq!(part.get_body_raw().unwrap(), b"<em>Good evening!</em>\n");
+        assert_eq!(part.get_body_raw().unwrap(), b"<em>Good evening!</em>");
         assert_eq!(part.subparts.len(), 0);
 
         part = parts.next().unwrap(); // mail.subparts[0].subparts[1]
         assert_eq!(part.headers.len(), 1);
         assert_eq!(part.ctype.mimetype, "text/plain");
-        assert_eq!(part.get_body_raw().unwrap(), b"Good evening!\n");
+        assert_eq!(part.get_body_raw().unwrap(), b"Good evening!");
         assert_eq!(part.subparts.len(), 0);
 
         assert!(parts.next().is_none());
