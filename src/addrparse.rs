@@ -13,6 +13,8 @@ pub struct SingleInfo {
 
 impl SingleInfo {
     fn new(name: Option<String>, addr: String) -> Result<Self, MailParseError> {
+        Ok(Self { display_name: name, addr })
+        /*
         if addr.contains('@') {
             Ok(SingleInfo {
                 display_name: name,
@@ -23,6 +25,7 @@ impl SingleInfo {
                 "Invalid address found: must contain a '@' symbol",
             ))
         }
+        */
     }
 }
 
